@@ -308,8 +308,8 @@ export default function ValentineChooser() {
 
   const checkSecret = () => {
     // รหัสลับที่เป็นวันที่พิเศษของคุณ
-    const secret1 = '03112023'
-    const secret2 = '26062000'
+    const secret1 = process.env.NEXT_PUBLIC_SECRET_1
+    const secret2 = process.env.NEXT_PUBLIC_SECRET_2
 
     if (secretInput === secret1 || secretInput === secret2) {
       // 1. ปลดล็อกสถานะและแสดง Modal พิเศษ
