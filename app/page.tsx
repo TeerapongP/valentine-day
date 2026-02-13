@@ -30,6 +30,44 @@ export default function ValentineChooser() {
   const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null)
   const bgMusicRef = useRef<HTMLAudioElement | null>(null)
   const unlockMusicRef = useRef<HTMLAudioElement | null>(null)
+  
+  // Rate limiting states
+  const [attemptCount, setAttemptCount] = useState(0)
+  const [isLocked, setIsLocked] = useState(false)
+  const [lockEndTime, setLockEndTime] = useState<number | null>(null)
+  const [remainingTime, setRemainingTime] = useState(0)
+
+  // Load rate limiting data from localStorage on mount
+  useEffect(() => {
+    const savedAttempts = localStorage.getItem('valentine_attempts')
+    const savedLockEndTime = localStorage.getItem('valentine_lock_end')
+    const savedUnlocked = localStorage.getItem('valentine_unlocked')
+
+    if (savedUnlocked === 'true') {
+      setUnlocked(true)
+    }
+
+    if (savedAttempts) {
+      setAttemptCount(parseInt(savedAttempts, 10))
+    }
+
+    if (savedLockEndTime) {
+      const lockTime = parseInt(savedLockEndTime, 10)
+      const now = Date.now()
+      
+      if (lockTime > now) {
+        // ยังอยู่ในช่วงล็อก
+        setIsLocked(true)
+        setLockEndTime(lockTime)
+        setRemainingTime(Math.ceil((lockTime - now) / 1000))
+      } else {
+        // หมดเวลาล็อกแล้ว - ล้างข้อมูล
+        localStorage.removeItem('valentine_lock_end')
+        localStorage.removeItem('valentine_attempts')
+        setAttemptCount(0)
+      }
+    }
+  }, [])
 
   // Initialize background music (but don't play yet)
   useEffect(() => {
@@ -45,6 +83,29 @@ export default function ValentineChooser() {
       }
     }
   }, [])
+
+  // Countdown timer for rate limiting
+  useEffect(() => {
+    if (!isLocked || !lockEndTime) return
+
+    const interval = setInterval(() => {
+      const now = Date.now()
+      const remaining = Math.max(0, Math.ceil((lockEndTime - now) / 1000))
+      
+      setRemainingTime(remaining)
+      
+      if (remaining <= 0) {
+        setIsLocked(false)
+        setLockEndTime(null)
+        setAttemptCount(0)
+        // ล้าง localStorage
+        localStorage.removeItem('valentine_lock_end')
+        localStorage.removeItem('valentine_attempts')
+      }
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [isLocked, lockEndTime])
 
   const activities: Activity[] = [
     // 🍽️ อาหาร & เครื่องดื่ม (15)
@@ -306,27 +367,74 @@ export default function ValentineChooser() {
     }, 1500)
   }
 
-  const checkSecret = () => {
-    // รหัสลับที่เป็นวันที่พิเศษของคุณ
-    const secret1 = process.env.NEXT_PUBLIC_SECRET_1
-    const secret2 = process.env.NEXT_PUBLIC_SECRET_2
+  const checkSecret = async () => {
+    // Check if locked
+    if (isLocked) {
+      setShakeSecret(true)
+      setTimeout(() => setShakeSecret(false), 500)
+      return
+    }
 
-    if (secretInput === secret1 || secretInput === secret2) {
-      // 1. ปลดล็อกสถานะและแสดง Modal พิเศษ
-      setUnlocked(true)
-      setShowSecret(false)
-      setShowUnlockModal(true)
+    try {
+      const response = await fetch('/api/check-secret', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ secret: secretInput }),
+      })
 
-      createHeartExplosion()
+      const data = await response.json()
 
-      if ('vibrate' in navigator) {
-        navigator.vibrate([200, 100, 200, 100, 200])
+      if (data.valid) {
+        // ปลดล็อกสำเร็จ - รีเซ็ตทุกอย่าง
+        setUnlocked(true)
+        setShowSecret(false)
+        setShowUnlockModal(true)
+        setAttemptCount(0)
+        setIsLocked(false)
+        setLockEndTime(null)
+
+        // บันทึกสถานะปลดล็อกและล้างข้อมูลการล็อก
+        localStorage.setItem('valentine_unlocked', 'true')
+        localStorage.removeItem('valentine_lock_end')
+        localStorage.removeItem('valentine_attempts')
+
+        createHeartExplosion()
+
+        if ('vibrate' in navigator) {
+          navigator.vibrate([200, 100, 200, 100, 200])
+        }
+
+      } else {
+        // ใส่รหัสผิด - เพิ่มจำนวนครั้ง
+        const newAttemptCount = attemptCount + 1
+        setAttemptCount(newAttemptCount)
+        
+        // บันทึกจำนวนครั้งที่ผิด
+        localStorage.setItem('valentine_attempts', newAttemptCount.toString())
+        
+        setShakeSecret(true)
+        setTimeout(() => setShakeSecret(false), 500)
+        setSecretInput('')
+
+        // ถ้าใส่ผิด 5 ครั้ง ให้ล็อก 3 นาที
+        if (newAttemptCount >= 5) {
+          const lockTime = Date.now() + (3 * 60 * 1000) // 3 minutes
+          setIsLocked(true)
+          setLockEndTime(lockTime)
+          setRemainingTime(180) // 3 minutes in seconds
+          
+          // บันทึกเวลาที่จะปลดล็อก
+          localStorage.setItem('valentine_lock_end', lockTime.toString())
+          
+          if ('vibrate' in navigator) {
+            navigator.vibrate([100, 50, 100, 50, 100, 50, 100])
+          }
+        }
       }
-
-      // หมายเหตุ: เพลง Taylor Swift จะยังคงเล่นต่อเนื่องไปเรื่อยๆ ตามที่คุณต้องการ
-
-    } else {
-      // กรณีใส่รหัสผิด: ให้ช่อง Input สั่น (Shake Animation) และแจ้งเตือน
+    } catch (error) {
+      console.error('Error checking secret:', error)
       setShakeSecret(true)
       setTimeout(() => setShakeSecret(false), 500)
       setSecretInput('')
@@ -405,19 +513,21 @@ export default function ValentineChooser() {
 
           {/* Secret Button */}
           <button
-            onClick={() => setShowSecret(!showSecret)}
+            onClick={() => unlocked ? setShowUnlockModal(true) : setShowSecret(!showSecret)}
             className="group relative inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-rose-200 to-pink-200 rounded-full text-rose-600 font-medium text-sm shadow-lg hover:shadow-xl active:scale-95 transition-all duration-300 border-2 border-rose-300 mb-4"
           >
-            <span className="text-lg">🔒</span>
-            <span>รหัสลับของเรา</span>
-            <svg
-              className={`w-4 h-4 transition-transform duration-300 ${showSecret ? 'rotate-180' : ''}`}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
+            <span className="text-lg">{unlocked ? '🔓' : '🔒'}</span>
+            <span>{unlocked ? 'ข้อความพิเศษ' : 'รหัสลับของเรา'}</span>
+            {!unlocked && (
+              <svg
+                className={`w-4 h-4 transition-transform duration-300 ${showSecret ? 'rotate-180' : ''}`}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            )}
           </button>
 
           {showSecret && !unlocked && (
@@ -429,32 +539,61 @@ export default function ValentineChooser() {
                   <span className="text-2xl">💝</span>
                 </div>
 
-                <div className="flex gap-2 mb-3">
-                  <input
-                    type="password"
-                    inputMode="numeric"
-                    value={secretInput}
-                    onChange={(e) => setSecretInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="••••••••"
-                    className="flex-1 px-4 py-3 rounded-xl border-2 border-rose-300 focus:border-rose-500 outline-none text-center font-mono text-lg bg-white font-bold text-rose-900 placeholder-rose-300"
-                    onKeyPress={(e) => e.key === 'Enter' && checkSecret()}
-                    maxLength={8}
-                    autoComplete="off"
-                  />
-                  <button
-                    onClick={checkSecret}
-                    className="px-5 py-3 bg-gradient-to-r from-rose-500 to-pink-500 text-white rounded-xl active:scale-95 transition-all font-bold shadow-lg text-lg"
-                  >
-                    ✓
-                  </button>
-                </div>
+                {isLocked ? (
+                  <div className="text-center py-6">
+                    <div className="text-5xl mb-4 animate-bounce">⏰</div>
+                    <p className="text-rose-700 font-bold text-lg mb-2">ใส่รหัสผิดเกินจำกัด!</p>
+                    <p className="text-rose-500 text-sm mb-4">กรุณารอสักครู่...</p>
+                    <div className="bg-rose-100 rounded-xl p-4 border-2 border-rose-300">
+                      <p className="text-3xl font-black text-rose-600 mb-1">
+                        {Math.floor(remainingTime / 60)}:{String(remainingTime % 60).padStart(2, '0')}
+                      </p>
+                      <p className="text-xs text-rose-500">นาที</p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex gap-2 mb-3">
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        value={secretInput}
+                        onChange={(e) => setSecretInput(e.target.value.replace(/\D/g, ''))}
+                        placeholder="••••••••"
+                        className="flex-1 px-4 py-3 rounded-xl border-2 border-rose-300 focus:border-rose-500 outline-none text-center font-mono text-lg bg-white font-bold text-rose-900 placeholder-rose-300"
+                        onKeyPress={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            checkSecret()
+                          }
+                        }}
+                        maxLength={8}
+                        autoComplete="off"
+                      />
+                      <button
+                        onClick={checkSecret}
+                        className="px-5 py-3 bg-gradient-to-r from-rose-500 to-pink-500 text-white rounded-xl active:scale-95 transition-all font-bold shadow-lg text-lg"
+                      >
+                        ✓
+                      </button>
+                    </div>
 
-                <div className="bg-rose-50 rounded-lg p-3 border border-rose-200">
-                  <p className="text-xs text-rose-500 flex items-center gap-2">
-                    <span>💡</span>
-                    <span>Hint: วันที่พิเศษของเรา (8 หลัก)</span>
-                  </p>
-                </div>
+                    <div className="bg-rose-50 rounded-lg p-3 border border-rose-200 mb-2">
+                      <p className="text-xs text-rose-500 flex items-center gap-2">
+                        <span>💡</span>
+                        <span>Hint: วันที่พิเศษของเรา (8 หลัก)</span>
+                      </p>
+                    </div>
+
+                    {attemptCount > 0 && (
+                      <div className="bg-orange-50 rounded-lg p-2 border border-orange-200">
+                        <p className="text-xs text-orange-600 text-center">
+                          ⚠️ ใส่ผิด {attemptCount}/5 ครั้ง {attemptCount >= 3 && '(ระวังนะ!)'}
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           )}
